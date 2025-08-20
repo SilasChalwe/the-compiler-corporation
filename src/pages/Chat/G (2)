@@ -1,0 +1,751 @@
+import React, { useState, useRef, useEffect } from "react";
+
+function Chat() {
+  // Persist messages using sessionStorage (cleared when browser closes)
+  const [messages, setMessages] = useState(() => {
+    try {
+      const saved = sessionStorage.getItem("chatMessages");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [copiedStates, setCopiedStates] = useState({});
+  const chatEndRef = useRef(null);
+
+  // Auto-scroll to bottom when new messages are added
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  // Save messages to sessionStorage whenever messages change
+  useEffect(() => {
+    try {
+      sessionStorage.setItem("chatMessages", JSON.stringify(messages));
+    } catch (error) {
+      console.error("Failed to save messages:", error);
+    }
+  }, [messages]);
+
+  const sendMessage = async () => {
+    if (!input.trim() || loading) return;
+
+    const userMessage = { sender: "user", text: input, timestamp: Date.now() };
+    setMessages((prev) => [...prev, userMessage]);
+    setInput("");
+    setLoading(true);
+
+    try {
+      // Build conversation context for the API call
+      const conversationHistory = messages.map(msg => ({
+        role: msg.sender === "user" ? "user" : "assistant",
+        content: msg.text
+      }));
+
+      const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${process.env.REACT_APP_OPENROUTER_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: "openai/gpt-3.5-turbo",
+          messages: [
+            { 
+              role: "system", 
+              content: "You are TheCompilerAi, an AI developed by The Compiler Corporation (a Next Innovative Minds subsidiary). Founder and CEO: Silas Chalwe. Format your responses with proper markdown: use **bold**, *italic*, `inline code`, code blocks with ```language, bullet points with -, numbered lists with 1., headers with #, and line breaks for readability." 
+            },
+            ...conversationHistory,
+            { role: "user", content: input }
+          ],
+        }),
+      });
+
+      if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
+      const data = await response.json();
+      const botText = data.choices[0].message.content;
+
+      setMessages((prev) => [...prev, { 
+        sender: "bot", 
+        text: botText, 
+        timestamp: Date.now() 
+      }]);
+    } catch (error) {
+      console.error("Error fetching response:", error);
+      setMessages((prev) => [
+        ...prev,
+        { 
+          sender: "bot", 
+          text: "⚠️ Could not fetch response. Please check your connection and API key.", 
+          timestamp: Date.now() 
+        },
+      ]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCopy = (text, blockId) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopiedStates({ ...copiedStates, [blockId]: true });
+      setTimeout(() => {
+        setCopiedStates(prev => {
+          const newState = { ...prev };
+          delete newState[blockId];
+          return newState;
+        });
+      }, 2000);
+    }).catch(err => {
+      console.error("Failed to copy: ", err);
+    });
+  };
+
+  const goHome = () => {
+    setMessages([]);
+    try {
+      sessionStorage.removeItem("chatMessages");
+    } catch (error) {
+      console.error("Failed to clear messages:", error);
+    }
+  };
+
+  // Enhanced markdown parser that handles all content types
+  const parseMarkdown = (text) => {
+    const elements = [];
+    const lines = text.split('\n');
+    let i = 0;
+
+    while (i < lines.length) {
+      const line = lines[i];
+
+      // Code blocks
+      if (line.startsWith('```')) {
+        const language = line.substring(3).trim() || 'plaintext';
+        const codeLines = [];
+        i++;
+        
+        while (i < lines.length && !lines[i].startsWith('```')) {
+          codeLines.push(lines[i]);
+          i++;
+        }
+        
+        const code = codeLines.join('\n');
+        const blockId = `code-${elements.length}-${Date.now()}`;
+        
+        elements.push(
+          <div key={blockId} style={ideContainerStyle}>
+            <div style={ideHeaderStyle}>
+              <div style={ideTabsStyle}>
+                <div style={ideTabStyle}>
+                  <span style={ideFileIconStyle}>{getFileIcon(language)}</span>
+                  <span style={ideFileNameStyle}>{getFileName(language)}</span>
+                </div>
+              </div>
+              <div style={ideActionsStyle}>
+                <button
+                  style={ideButtonStyle}
+                  onClick={() => handleCopy(code, blockId)}
+                  title="Copy code"
+                >
+                  {copiedStates[blockId] ? "✓ Copied" : "📋 Copy"}
+                </button>
+              </div>
+            </div>
+            <div style={ideContentStyle}>
+              <div style={ideLineNumbersStyle}>
+                {codeLines.map((_, idx) => (
+                  <div key={idx} style={lineNumberStyle}>
+                    {idx + 1}
+                  </div>
+                ))}
+              </div>
+              <pre style={ideCodeStyle}>
+                <code>{renderSyntaxHighlightedCode(code, language)}</code>
+              </pre>
+            </div>
+            <div style={ideFooterStyle}>
+              <span style={ideLanguageStyle}>{language.toUpperCase()}</span>
+              <span style={ideStatsStyle}>{codeLines.length} lines</span>
+            </div>
+          </div>
+        );
+      }
+      // Headers
+      else if (line.startsWith('#')) {
+        const level = line.match(/^#+/)[0].length;
+        const text = line.substring(level).trim();
+        const HeaderTag = `h${Math.min(level, 6)}`;
+        elements.push(
+          <HeaderTag key={`header-${elements.length}`} style={getHeaderStyle(level)}>
+            {text}
+          </HeaderTag>
+        );
+      }
+      // Bullet points
+      else if (line.trim().startsWith('- ') || line.trim().startsWith('* ')) {
+        const listItems = [];
+        while (i < lines.length && (lines[i].trim().startsWith('- ') || lines[i].trim().startsWith('* '))) {
+          listItems.push(lines[i].trim().substring(2));
+          i++;
+        }
+        i--; // Adjust for the outer loop increment
+        
+        elements.push(
+          <ul key={`list-${elements.length}`} style={listStyle}>
+            {listItems.map((item, idx) => (
+              <li key={idx} style={listItemStyle}>{parseInlineMarkdown(item)}</li>
+            ))}
+          </ul>
+        );
+      }
+      // Numbered lists
+      else if (/^\d+\.\s/.test(line.trim())) {
+        const listItems = [];
+        while (i < lines.length && /^\d+\.\s/.test(lines[i].trim())) {
+          listItems.push(lines[i].trim().replace(/^\d+\.\s/, ''));
+          i++;
+        }
+        i--; // Adjust for the outer loop increment
+        
+        elements.push(
+          <ol key={`ordered-list-${elements.length}`} style={listStyle}>
+            {listItems.map((item, idx) => (
+              <li key={idx} style={listItemStyle}>{parseInlineMarkdown(item)}</li>
+            ))}
+          </ol>
+        );
+      }
+      // Regular paragraphs
+      else if (line.trim()) {
+        elements.push(
+          <p key={`p-${elements.length}`} style={paragraphStyle}>
+            {parseInlineMarkdown(line)}
+          </p>
+        );
+      }
+      // Empty lines (spacing)
+      else {
+        elements.push(<br key={`br-${elements.length}`} />);
+      }
+      
+      i++;
+    }
+
+    return elements;
+  };
+
+  // Parse inline markdown (bold, italic, inline code)
+  const parseInlineMarkdown = (text) => {
+    const parts = [];
+    let key = 0;
+
+    // Handle inline code first
+    const codeRegex = /`([^`]+)`/g;
+    let lastIndex = 0;
+    let match;
+
+    while ((match = codeRegex.exec(text)) !== null) {
+      if (match.index > lastIndex) {
+        parts.push(processTextFormatting(text.slice(lastIndex, match.index), key++));
+      }
+      parts.push(
+        <code key={key++} style={inlineCodeStyle}>
+          {match[1]}
+        </code>
+      );
+      lastIndex = codeRegex.lastIndex;
+    }
+
+    if (lastIndex < text.length) {
+      parts.push(processTextFormatting(text.slice(lastIndex), key++));
+    }
+
+    return parts.length > 0 ? parts : text;
+  };
+
+  // Process bold and italic formatting
+  const processTextFormatting = (text, key) => {
+    if (!text) return null;
+
+    let result = text;
+    
+    // Simple regex for bold **text**
+    result = result.replace(/\*\*(.*?)\*\*/g, (match, content) => {
+      return `<BOLD>${content}</BOLD>`;
+    });
+    
+    // Simple regex for italic *text*
+    result = result.replace(/\*(.*?)\*/g, (match, content) => {
+      return `<ITALIC>${content}</ITALIC>`;
+    });
+
+    // Split and render
+    const segments = result.split(/(<BOLD>.*?<\/BOLD>|<ITALIC>.*?<\/ITALIC>)/);
+    
+    return segments.map((segment, idx) => {
+      if (segment.startsWith('<BOLD>')) {
+        return <strong key={`${key}-${idx}`}>{segment.replace(/<\/?BOLD>/g, '')}</strong>;
+      } else if (segment.startsWith('<ITALIC>')) {
+        return <em key={`${key}-${idx}`}>{segment.replace(/<\/?ITALIC>/g, '')}</em>;
+      }
+      return segment;
+    });
+  };
+
+  // Fully responsive styles
+  const containerStyle = {
+    display: 'flex',
+    flexDirection: 'column',
+    height: '100vh',
+    width: '100vw',
+    backgroundColor: '#0d1117',
+    color: '#e6edf3',
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif',
+    overflow: 'hidden',
+    position: 'relative'
+  };
+
+  const homeButtonStyle = {
+    position: 'fixed',
+    top: 'clamp(12px, 3vw, 20px)',
+    right: 'clamp(12px, 3vw, 20px)',
+    zIndex: 1000,
+    padding: 'clamp(8px, 2vw, 12px) clamp(12px, 3vw, 16px)',
+    backgroundColor: '#238636',
+    color: '#ffffff',
+    border: 'none',
+    borderRadius: 'clamp(16px, 4vw, 20px)',
+    cursor: 'pointer',
+    fontSize: 'clamp(12px, 3vw, 14px)',
+    fontWeight: '500',
+    boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+    transition: 'all 0.3s ease',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 'clamp(4px, 1vw, 6px)',
+    backdropFilter: 'blur(10px)',
+    minWidth: 'clamp(80px, 20vw, 100px)'
+  };
+
+  const chatBoxStyle = {
+    flex: 1,
+    overflowY: 'auto',
+    padding: 'clamp(60px, 15vw, 80px) clamp(12px, 3vw, 20px) clamp(80px, 20vw, 100px) clamp(12px, 3vw, 20px)',
+    backgroundColor: '#0d1117',
+    backgroundImage: `
+      radial-gradient(circle at 20% 50%, rgba(56, 189, 248, 0.03) 0%, transparent 50%),
+      radial-gradient(circle at 80% 20%, rgba(139, 92, 246, 0.03) 0%, transparent 50%),
+      radial-gradient(circle at 40% 80%, rgba(34, 197, 94, 0.03) 0%, transparent 50%)
+    `,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 'clamp(8px, 2vw, 12px)',
+    scrollBehavior: 'smooth'
+  };
+
+  const messageStyle = (sender) => ({
+    padding: 'clamp(10px, 2.5vw, 14px) clamp(12px, 3vw, 16px)',
+    borderRadius: 'clamp(12px, 3vw, 16px)',
+    maxWidth: sender === 'user' ? 'min(85%, clamp(280px, 70vw, 450px))' : 'min(90%, clamp(300px, 75vw, 550px))',
+    alignSelf: sender === 'user' ? 'flex-end' : 'flex-start',
+    backgroundColor: sender === 'user' ? '#1f6feb' : '#21262d',
+    border: `1px solid ${sender === 'user' ? '#1f6feb' : '#30363d'}`,
+    color: sender === 'user' ? '#ffffff' : '#e6edf3',
+    wordWrap: 'break-word',
+    wordBreak: 'break-word',
+    fontSize: 'clamp(14px, 3.5vw, 16px)',
+    lineHeight: 'clamp(1.4, 0.2vw + 1.3, 1.6)',
+    position: 'relative',
+    boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
+    margin: sender === 'user' ? '0 0 0 auto' : '0 auto 0 0',
+    backdropFilter: 'blur(10px)'
+  });
+
+  const inputContainerStyle = {
+    position: 'fixed',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    zIndex: 100,
+    display: 'flex',
+    gap: 'clamp(8px, 2vw, 12px)',
+    padding: 'clamp(12px, 3vw, 16px)',
+    backgroundColor: 'rgba(13, 17, 23, 0.95)',
+    backdropFilter: 'blur(20px)',
+    borderTop: '1px solid #30363d',
+    alignItems: 'flex-end'
+  };
+
+  const inputStyle = {
+    flex: 1,
+    padding: 'clamp(12px, 3vw, 16px)',
+    border: '1px solid #30363d',
+    borderRadius: 'clamp(20px, 5vw, 24px)',
+    backgroundColor: '#21262d',
+    color: '#e6edf3',
+    fontSize: 'clamp(14px, 3.5vw, 16px)',
+    lineHeight: 'clamp(1.4, 0.2vw + 1.3, 1.6)',
+    outline: 'none',
+    resize: 'none',
+    minHeight: 'clamp(20px, 5vw, 24px)',
+    maxHeight: 'clamp(100px, 25vw, 140px)',
+    fontFamily: 'inherit',
+    transition: 'all 0.2s ease'
+  };
+
+  const sendButtonStyle = (disabled) => ({
+    padding: 'clamp(12px, 3vw, 16px)',
+    backgroundColor: disabled ? '#30363d' : '#238636',
+    color: disabled ? '#656d76' : '#ffffff',
+    border: 'none',
+    borderRadius: '50%',
+    cursor: disabled ? 'not-allowed' : 'pointer',
+    fontSize: 'clamp(16px, 4vw, 20px)',
+    width: 'clamp(44px, 11vw, 52px)',
+    height: 'clamp(44px, 11vw, 52px)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    transition: 'all 0.3s ease',
+    boxShadow: disabled ? 'none' : '0 2px 8px rgba(35, 134, 54, 0.3)',
+    flexShrink: 0,
+    backdropFilter: 'blur(10px)'
+  });
+
+  const clearChat = () => {
+    setMessages([]);
+    try {
+      sessionStorage.removeItem("chatMessages");
+    } catch (error) {
+      console.error("Failed to clear messages:", error);
+    }
+  };
+
+  // IDE-like styles
+  const ideContainerStyle = {
+    margin: 'clamp(12px, 3vw, 16px) 0',
+    borderRadius: 'clamp(8px, 2vw, 12px)',
+    overflow: 'hidden',
+    backgroundColor: '#1e1e1e',
+    border: '1px solid #3e3e42',
+    boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
+    fontFamily: '"Fira Code", "JetBrains Mono", "SF Mono", "Monaco", "Cascadia Code", "Roboto Mono", monospace'
+  };
+
+  const ideHeaderStyle = {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#2d2d30',
+    borderBottom: '1px solid #3e3e42',
+    padding: '0'
+  };
+
+  const ideTabsStyle = {
+    display: 'flex',
+    alignItems: 'center'
+  };
+
+  const ideTabStyle = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 'clamp(4px, 1vw, 8px)',
+    padding: 'clamp(8px, 2vw, 12px) clamp(12px, 3vw, 16px)',
+    backgroundColor: '#1e1e1e',
+    borderRight: '1px solid #3e3e42',
+    fontSize: 'clamp(11px, 2.5vw, 13px)',
+    color: '#cccccc',
+    fontWeight: '500'
+  };
+
+  const ideFileIconStyle = {
+    fontSize: 'clamp(12px, 3vw, 14px)'
+  };
+
+  const ideFileNameStyle = {
+    fontSize: 'clamp(11px, 2.5vw, 13px)',
+    color: '#cccccc'
+  };
+
+  const ideActionsStyle = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 'clamp(4px, 1vw, 8px)',
+    padding: 'clamp(8px, 2vw, 12px)'
+  };
+
+  const ideButtonStyle = {
+    padding: 'clamp(4px, 1vw, 6px) clamp(8px, 2vw, 12px)',
+    fontSize: 'clamp(10px, 2.5vw, 12px)',
+    backgroundColor: '#0e639c',
+    color: '#ffffff',
+    border: 'none',
+    borderRadius: 'clamp(3px, 0.75vw, 4px)',
+    cursor: 'pointer',
+    fontWeight: '500',
+    transition: 'all 0.2s ease',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 'clamp(3px, 0.75vw, 4px)'
+  };
+
+  const ideContentStyle = {
+    display: 'flex',
+    backgroundColor: '#1e1e1e',
+    minHeight: 'clamp(100px, 25vw, 200px)',
+    maxHeight: 'clamp(300px, 50vh, 600px)',
+    overflow: 'auto'
+  };
+
+  const ideLineNumbersStyle = {
+    backgroundColor: '#1e1e1e',
+    borderRight: '1px solid #3e3e42',
+    padding: 'clamp(12px, 3vw, 16px) clamp(8px, 2vw, 12px)',
+    minWidth: 'clamp(40px, 10vw, 60px)',
+    textAlign: 'right',
+    userSelect: 'none',
+    fontSize: 'clamp(11px, 2.5vw, 13px)',
+    lineHeight: 'clamp(1.4, 0.2vw + 1.3, 1.6)',
+    color: '#858585',
+    fontFamily: 'inherit'
+  };
+
+  const lineNumberStyle = {
+    height: 'clamp(18px, 4.5vw, 22px)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    position: 'relative'
+  };
+
+  const ideCodeStyle = {
+    flex: 1,
+    margin: 0,
+    padding: 'clamp(12px, 3vw, 16px)',
+    backgroundColor: '#1e1e1e',
+    color: '#d4d4d4',
+    fontSize: 'clamp(12px, 3vw, 14px)',
+    lineHeight: 'clamp(1.4, 0.2vw + 1.3, 1.6)',
+    overflow: 'auto',
+    fontFamily: 'inherit',
+    whiteSpace: 'pre',
+    wordWrap: 'break-word',
+    tabSize: 2
+  };
+
+  const ideFooterStyle = {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#007acc',
+    padding: 'clamp(4px, 1vw, 6px) clamp(12px, 3vw, 16px)',
+    fontSize: 'clamp(10px, 2.5vw, 11px)',
+    color: '#ffffff',
+    fontWeight: '500'
+  };
+
+  const ideLanguageStyle = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 'clamp(4px, 1vw, 6px)'
+  };
+
+  const ideStatsStyle = {
+    opacity: 0.8
+  };
+
+  const getHeaderStyle = (level) => ({
+    margin: 'clamp(12px, 3vw, 20px) 0 clamp(6px, 1.5vw, 10px) 0',
+    fontSize: `clamp(${1.2 - level * 0.15}rem, ${3.5 - level * 0.3}vw, ${1.8 - level * 0.2}rem)`,
+    fontWeight: '600',
+    color: '#e6edf3',
+    lineHeight: 'clamp(1.2, 0.1vw + 1.15, 1.3)'
+  });
+
+  const paragraphStyle = {
+    margin: 'clamp(6px, 1.5vw, 10px) 0',
+    lineHeight: 'clamp(1.4, 0.2vw + 1.3, 1.6)',
+    color: '#e6edf3'
+  };
+
+  const listStyle = {
+    margin: 'clamp(6px, 1.5vw, 10px) 0',
+    paddingLeft: 'clamp(16px, 4vw, 24px)'
+  };
+
+  const listItemStyle = {
+    margin: 'clamp(3px, 0.75vw, 5px) 0',
+    lineHeight: 'clamp(1.4, 0.2vw + 1.3, 1.6)',
+    color: '#e6edf3'
+  };
+
+  const inlineCodeStyle = {
+    backgroundColor: '#6e7681',
+    color: '#0d1117',
+    padding: 'clamp(1px, 0.25vw, 2px) clamp(3px, 0.75vw, 4px)',
+    borderRadius: 'clamp(2px, 0.5vw, 3px)',
+    fontSize: 'clamp(0.85em, 0.2vw + 0.8em, 0.9em)',
+    fontFamily: '"SF Mono", "Monaco", Consolas, monospace',
+    fontWeight: '500'
+  };
+
+  const welcomeStyle = {
+    textAlign: 'center',
+    padding: 'clamp(30px, 8vw, 50px) clamp(15px, 4vw, 25px)',
+    color: '#7d8590',
+    fontSize: 'clamp(14px, 3.5vw, 18px)',
+    lineHeight: 'clamp(1.4, 0.2vw + 1.3, 1.6)',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 'clamp(10px, 2.5vw, 16px)'
+  };
+
+  const typingContainerStyle = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 'clamp(6px, 1.5vw, 10px)',
+    padding: 'clamp(8px, 2vw, 12px)'
+  };
+
+  const typingDotsStyle = {
+    display: 'flex',
+    gap: 'clamp(3px, 0.75vw, 4px)'
+  };
+
+  const dotStyle = {
+    width: 'clamp(6px, 1.5vw, 8px)',
+    height: 'clamp(6px, 1.5vw, 8px)',
+    backgroundColor: '#7d8590',
+    borderRadius: '50%',
+    animation: 'typing 1.4s infinite ease-in-out'
+  };
+
+  return (
+    <div style={containerStyle}>
+      <style>
+        {`
+          @keyframes typing {
+            0%, 80%, 100% { 
+              transform: scale(0.7); 
+              opacity: 0.3; 
+            }
+            40% { 
+              transform: scale(1.1); 
+              opacity: 1; 
+            }
+          }
+          
+          .typing-dot:nth-child(1) { animation-delay: -0.32s; }
+          .typing-dot:nth-child(2) { animation-delay: -0.16s; }
+          .typing-dot:nth-child(3) { animation-delay: 0s; }
+          
+          /* Custom scrollbar */
+          ::-webkit-scrollbar {
+            width: clamp(4px, 1vw, 8px);
+          }
+          ::-webkit-scrollbar-track {
+            background: #0d1117;
+          }
+          ::-webkit-scrollbar-thumb {
+            background: #30363d;
+            border-radius: clamp(2px, 0.5vw, 4px);
+          }
+          ::-webkit-scrollbar-thumb:hover {
+            background: #484f58;
+          }
+          
+          /* Focus styles */
+          input:focus, textarea:focus {
+            outline: 2px solid #1f6feb;
+            outline-offset: 0;
+            border-color: #1f6feb;
+          }
+          
+          /* Responsive utility classes */
+          @media (max-width: 480px) {
+            .mobile-hide {
+              display: none !important;
+            }
+          }
+          
+          /* Smooth transitions */
+          * {
+            transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+          }
+        `}
+      </style>
+      
+      {/* Floating Home Button */}
+      <button 
+        onClick={goHome} 
+        style={homeButtonStyle}
+        onMouseEnter={(e) => e.target.style.backgroundColor = '#2ea043'}
+        onMouseLeave={(e) => e.target.style.backgroundColor = '#238636'}
+      >
+        🏠 Home
+      </button>
+
+      {/* Scrollable Messages Area */}
+      <div style={chatBoxStyle}>
+        {messages.length === 0 && (
+          <div style={welcomeStyle}>
+            <div style={{ fontSize: 'clamp(32px, 8vw, 48px)' }}>🤖</div>
+            <div>
+              <div style={{ fontWeight: '600', color: '#e6edf3', marginBottom: 'clamp(4px, 1vw, 8px)' }}>
+                Welcome to TheCompilerAi
+              </div>
+              <div>Ask me anything about programming, coding, or any topic!</div>
+            </div>
+          </div>
+        )}
+        
+        {messages.map((msg, idx) => (
+          <div key={`msg-${idx}-${msg.timestamp}`} style={messageStyle(msg.sender)}>
+            {msg.sender === 'bot' ? parseMarkdown(msg.text) : msg.text}
+          </div>
+        ))}
+        
+        {loading && (
+          <div style={messageStyle('bot')}>
+            <div style={typingContainerStyle}>
+              <div style={typingDotsStyle}>
+                <div className="typing-dot" style={dotStyle}></div>
+                <div className="typing-dot" style={dotStyle}></div>
+                <div className="typing-dot" style={dotStyle}></div>
+              </div>
+              <span style={{ color: '#7d8590', fontSize: 'clamp(12px, 3vw, 14px)' }}>
+                TheCompilerAi is thinking...
+              </span>
+            </div>
+          </div>
+        )}
+        <div ref={chatEndRef} />
+      </div>
+
+      {/* Fixed Input Area */}
+      <div style={inputContainerStyle}>
+        <input
+          type="text"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          placeholder="Type your message here..."
+          onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && sendMessage()}
+          disabled={loading}
+          style={inputStyle}
+        />
+        <button 
+          onClick={sendMessage} 
+          disabled={loading || !input.trim()}
+          style={sendButtonStyle(loading || !input.trim())}
+        >
+          {loading ? "⏳" : "🚀"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export default Chat;

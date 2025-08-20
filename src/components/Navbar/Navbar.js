@@ -14,7 +14,7 @@ function Navbar() {
     <nav className="navbar">
       <div className="navbar-logo">
         <img src={logo} alt="Logo" />
-        <h1>The Compiler Corporation</h1>
+        <h1>TCC</h1>
       </div>
 
       <ul className={`navbar-links ${menuActive ? "active" : ""}`}>
@@ -23,6 +23,7 @@ function Navbar() {
         <li><Link to="/projects">Projects</Link></li>
         <li><Link to="/team">Team</Link></li>
         <li><Link to="/contact">Contact</Link></li>
+        <li><Link to="/chat">Chat</Link></li> {/* ✅ New Chat link */}
       </ul>
 
       <div className="hamburger" onClick={toggleMenu}>
